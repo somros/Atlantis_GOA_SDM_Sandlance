@@ -1,0 +1,199 @@
+---
+title: "Sandlance spatial distributions from groundfish diet"
+author: "Alberto Rovellini"
+date: "10/28/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(rbgm)
+library(sf)
+library(viridis)
+library(maps)
+library(mapdata)
+library(data.table)
+```
+
+```{r}
+select <- dplyr::select
+```
+
+# Purpose
+
+This document attempts to leverage stomach content data to map sandlance biomass distributions in the GOA. The simplest level would be presence-absence. How would we go about an index of sandlance abundance that accounts for predator abundance? And, there are several nuances in the bottom trawl diet data due to the sampling design, that prevent us from working at haul level. This could be a good exercise to try and work with the biomass weighting. 
+
+[Gruss et al. (2020)](https://onlinelibrary.wiley.com/doi/epdf/10.1111/faf.12457) develop a modelling aproach that "fits a model to both prey-biomass-per-predator-biomass data (i.e. the ratio of prey biomass in stomachs to predator weight) and predator biomass catch rate data, to predict “predator-expanded-stomach-contents” (the product of prey-biomass-per-predator-biomass, predator biomass per unit area and surface area).
+
+In a far less elegant way, and one that entirely ignores spatio-temporal differences and uncertainties at every level, we could estimate coarse sandlance distributions with the following approach:
+
+1. Figure out the main sandlance eaters in the groundfish diet data, hoping that they are a limited number of species.
+2. In each Atlantis box, calculate the average prey-biomass-per-predator-biomass data for sandlance and each predator. This will be some fraction of 1.
+3. Take the biomass estimates per box that we already developed with sdmTMB for each predator.
+4. Multiply the box-specific prey-biomass-per-predator-biomass by the predator biomass in that box.
+5. Sum it all up by box for the different predators and get an estimate of the sandlance that gets eaten in each box.
+
+This will give us estimates of the sandlance biomass in that box. Assumptions and issues here are that:
+
+1. Predators are entirely opportunistic and will eat as much sandlance as it is available to them throughout the model domain. For example, if sandlance does not show up in the diet of cod in a box, it is because there is no sandlance there, not because cod does not eat it in that box.
+2. If a predator is missing from a box, sandlance may still be there but not get detected, and result as also absent from that box. All we know about sandlance with this method is where some got eaten.
+3. The sandlance that gets eaten is some unknown proportion of the real sandlance biomass, and this proportion is constant throughout the model domain.
+4. We are ignoring year entirely, meaning that we assume there have been no shifts in diet preference of sandlance predators - pure opportunism.
+
+# Read data
+
+Read diet data, subset it to sandlance only, then read Atlantis geometry.
+```{r}
+diet <- read.csv('../data/diet/1_Gulf Of Alaska_RawPP.csv')
+ate_sandlance <- diet %>% filter(Prey_Name=='Ammodytidae')
+
+#atlantis geometry
+atlantis_bgm <- read_bgm('../data/GOA_WGS84_V4_final.bgm')
+atlantis_box <- atlantis_bgm %>% box_sf()
+atlantis_bbox <- atlantis_box %>% st_bbox()
+atlantis_crs <- atlantis_bgm$extra$projection
+
+# make some coastlines
+coast <- maps::map("worldHires", c("USA","Canada"), plot = FALSE, fill = TRUE)
+coast_sf <- coast %>% st_as_sf() #%>% st_transform(crs = atlantis_crs) 
+```
+
+Have a look at this: how many predator species, and how many data points per Atlantis box? It is not a big data set.
+```{r}
+predators <- ate_sandlance %>% select(Pred_name) %>% distinct() %>% arrange(Pred_name) %>% pull()
+
+top_pred <- ate_sandlance %>% group_by(Pred_name) %>% 
+  tally() %>% 
+  ungroup() %>%
+  arrange(desc(n)) %>% 
+  mutate(Prop=cumsum(n)/sum(n)) %>%
+  head(4)
+top_pred
+```
+
+Four species seem to make up for 90% of the occurrences of sandlance predation in the data (occurrence, not eaten biomass, which should get rid of the occasional feast from the odd opportunist): halibut, cod, arrowtooth flounder, and pollock, with really the first three being the most common consumers. Let's simplify and focus on these four species only.
+
+If we assume that these species eat sandlance, we need to have zeroes in the data too: hauls where these four species were caught but had no sandlance in their stomach.
+
+```{r}
+ate_sandlance <- ate_sandlance %>% filter(Pred_name %in% top_pred$Pred_name)
+
+no_sandlance <- diet %>% filter(Pred_name %in% top_pred$Pred_name & Prey_Name!='Ammodytidae') %>%
+  mutate(Prey_nodc=8845010100,
+         Prey_cnt=0,
+         Prey_twt=0,
+         Prey_Name='Ammodytidae',
+         Pred_dig=NA,
+         Prey_lh=NA,
+         Prey_parts=NA) %>%
+  distinct() %>%
+  filter(Pred_stomwt>0) # discard the empty stomach: if it did not eat anything, we do not know if sandlance was there or not. The 'zeroes' will be where fish ate something else than sandlance. Check how this assumption influences the model
+
+# check that individuals are indeed unique
+#no_sandlance %>% mutate(ID=paste0(Hauljoin,Pred_nodc,Pred_specn)) %>% select(ID) %>% distinct() %>% pull() %>% length()
+```
+
+Have a look in space
+```{r, fig.align="center"}
+sandlance_sf <- rbind(ate_sandlance,no_sandlance) %>% 
+  st_as_sf(coords=c('Rlong','Rlat'),crs=4326)
+
+sandlance_bbox <- sandlance_sf %>% st_bbox()
+
+sandlance_sf %>% ggplot()+
+  geom_sf(aes(color=Prey_twt/Pred_wt, shape = factor(Pred_name)))+
+  geom_sf(data=coast_sf)+
+  coord_sf(xlim=c(sandlance_bbox$xmin,sandlance_bbox$xmax), ylim=c(sandlance_bbox$ymin,sandlance_bbox$ymax))+
+  scale_color_viridis()+
+  theme_minimal()
+```
+
+Almost no predation of groundfish on sandlance in the EGOA. According to our assumptions, that means that there is no sandlance there. Compare this assumption with maps of sediments. The rough mapping work we did from the dbSEABED shows that there is little 'sand' in the east and center, but plenty of mud. Not sure where these guys hang out, read Matt Baker's papers.
+
+The average prey-biomass-per-predator-biomass will be really low with all these zeroes, but it is they whole point. I anticipate there will be a very high variability, both from process and sampling error.
+
+# Analysis
+
+Steps are:
+
+0. Drop some columns
+1. Calculate PBPPB for each individual. 
+2. Join with the Atlantis box set (i.e. which box does the data point fall into?) 
+3. Group by predator species and by box, and take an average. That is the PBPPB by species by box. 
+4. Read in the biomass maps in tons for the four predator species predicted by sdmTMB (although long-term we will want to use the stock assessment biomass as apportioned by the sdmTMB workflow rather than biomass estimates out of sdmTMB proper).
+5. Join by box, to add the predator biomass in that box.
+6. Multiply PBPPB by predator biomass within each box.
+7. Add up the results from the four species for each box.
+8. Plot the map of sandlance consumption by Atlantis box.
+
+```{r}
+#0.
+sandlance_sf <- sandlance_sf %>% 
+  select(Hauljoin,Pred_nodc,Pred_specn,Prey_twt,Pred_wt,Year,Pred_name,Bottom_depth)
+#1.
+sandlance_sf <- sandlance_sf %>% 
+  mutate(PBPPB=Prey_twt/Pred_wt)
+#2.
+sandlance_sf <- sandlance_sf %>% 
+  st_transform(crs=atlantis_crs) %>% # need to put this to the same CRS as the Atlantis geometry for a spatial join
+  st_join(atlantis_box %>% select(.bx0,boundary)) %>%
+  filter(!is.na(.bx0)) # drop points that do not fall into any box 
+#3.
+sandlance_sf <- sandlance_sf %>% 
+  group_by(Pred_name,.bx0) %>%
+  summarise(PBPPB=mean(PBPPB,na.rm=TRUE)) %>% 
+  ungroup()
+#4. Note that column 'biomass' is in tons for that box
+hal <- read.csv('../data/cpue_tables/Halibut_AFSC.csv')
+cod <- read.csv('../data/cpue_tables/Cod_AFSC.csv')
+atf <- read.csv('../data/cpue_tables/Arrowtooth_flounder_AFSC.csv')
+pol <- read.csv('../data/cpue_tables/Pollock_AFSC.csv')
+#5. # do it separate and then rejoin them
+hal_sl <- sandlance_sf %>% filter(Pred_name=='Hippoglossus stenolepis') %>%
+  left_join(hal %>% select(box_id,biomass), by = c('.bx0'='box_id'))
+cod_sl <- sandlance_sf %>% filter(Pred_name=='Gadus macrocephalus') %>%
+  left_join(cod %>% select(box_id,biomass), by = c('.bx0'='box_id'))
+atf_sl <- sandlance_sf %>% filter(Pred_name=='Atheresthes stomias') %>%
+  left_join(atf %>% select(box_id,biomass), by = c('.bx0'='box_id'))
+pol_sl <- sandlance_sf %>% filter(Pred_name=='Gadus chalcogrammus') %>%
+  left_join(pol %>% select(box_id,biomass), by = c('.bx0'='box_id'))
+sandlance_all <- rbind(hal_sl,cod_sl,atf_sl,pol_sl)
+#6.
+sandlance_all <- sandlance_all %>% 
+  mutate(Sandlance_biomass=PBPPB*biomass) # biomass here is in mt
+#7.
+sandlance_all <- sandlance_all %>% 
+  group_by(.bx0) %>%
+  summarise(Sandlance_biomass=sum(Sandlance_biomass,na.rm = TRUE)) %>%
+  ungroup()
+#8.
+atlantis_box_sl <- atlantis_box %>% 
+  left_join(sandlance_all %>% st_set_geometry(NULL), by=c('box_id'='.bx0'))
+```
+
+Plot.
+```{r, fig.align="center"}
+atlantis_box_sl %>% 
+  rowwise() %>% 
+  mutate(Sandlance_biomass=ifelse(isTRUE(boundary),NA,Sandlance_biomass)) %>% 
+  ggplot()+
+  geom_sf(aes(fill=log1p(Sandlance_biomass)))+
+  geom_sf(data=coast_sf %>% st_transform(crs=atlantis_crs))+
+  coord_sf(xlim=c(atlantis_bbox$xmin,atlantis_bbox$xmax),ylim =c(atlantis_bbox$ymin,atlantis_bbox$ymax))+
+  scale_fill_viridis()+
+  theme_minimal()+
+  labs(title='Estimated consumed sandlance in the GOA Atlantis boxes', fill='Log-biomass (mt)')
+
+```
+Mostly on the western GOA shelf. How does this stack with depth?
+```{r, fig.align="center"}
+atlantis_box_sl %>% filter(Sandlance_biomass>0) %>% 
+  ggplot()+geom_point(aes(x=-botz,y=Sandlance_biomass))+theme_minimal()
+```
+Highest biomass value predicted at 130 m, other than that mostly found in shallower boxes < 100 m, and present in smaller amounts down to <300 m. 
+
+Below are the maps for flat (roughyl equal to sand) and soft (roughly equal to mud) that we had mapped to the Atlantis boxes. ![This is sand.](../data/sand.png) ![This is mud.](../data/mud.png). For what we called "flat" (sandy categories in the dbSEABED data), there seems to be a lot more in the WGOA, consistently with these predictions for sandlance spatial distributions. However, there is some sand in the Southeast too. Also, for mud it is a different story, plenty in the CGOA and EGOA (not so much in the SE).
