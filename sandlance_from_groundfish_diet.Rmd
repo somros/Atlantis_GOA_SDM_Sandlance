@@ -31,7 +31,7 @@ This document attempts to leverage stomach content data to map sandlance biomass
 
 In a far less elegant way, and one that entirely ignores spatio-temporal differences and uncertainties at every level, we could estimate coarse sandlance distributions with the following approach:
 
-1. Figure out the main sandlance eaters in the groundfish diet data, hoping that they are a limited number of species.
+1. Figure out the main sandlance eaters in the groundfish diet data.
 2. In each Atlantis box, calculate the average prey-biomass-per-predator-biomass data for sandlance and each predator. This will be some fraction of 1.
 3. Take the biomass estimates per box that we already developed with sdmTMB for each predator.
 4. Multiply the box-specific prey-biomass-per-predator-biomass by the predator biomass in that box.
@@ -187,7 +187,6 @@ atlantis_box_sl %>%
   scale_fill_viridis()+
   theme_minimal()+
   labs(title='Estimated consumed sandlance in the GOA Atlantis boxes', fill='Log-biomass (mt)')
-
 ```
 Mostly on the western GOA shelf. How does this stack with depth?
 ```{r, fig.align="center"}
@@ -196,4 +195,30 @@ atlantis_box_sl %>% filter(Sandlance_biomass>0) %>%
 ```
 Highest biomass value predicted at 130 m, other than that mostly found in shallower boxes < 100 m, and present in smaller amounts down to <300 m. 
 
-Below are the maps for flat (roughyl equal to sand) and soft (roughly equal to mud) that we had mapped to the Atlantis boxes. ![This is sand.](../data/sand.png) ![This is mud.](../data/mud.png). For what we called "flat" (sandy categories in the dbSEABED data), there seems to be a lot more in the WGOA, consistently with these predictions for sandlance spatial distributions. However, there is some sand in the Southeast too. Also, for mud it is a different story, plenty in the CGOA and EGOA (not so much in the SE).
+Below are the maps for flat (roughly equal to sand) and soft (roughly equal to mud) that we had mapped to the Atlantis boxes. ![This is sand.](../data/sand.png) ![This is mud.](../data/mud.png). For what we called "flat" (sandy categories in the dbSEABED data), there seems to be a lot more in the WGOA, consistently with these predictions for sandlance spatial distributions. However, there is some sand in the Southeast too. Also, for mud it is a different story, plenty in the CGOA and EGOA (not so much in the SE).
+
+As always, we are limited in that there is no data from BC. For now, assign the smallest proportion in the model to the boxes that have zero biomass, for consistency with what has been done for other groups (e.g., capelin).
+```{r}
+# turn NAs to zeroes for this step
+atlantis_box_sl$Sandlance_biomass[is.na(atlantis_box_sl$Sandlance_biomass)] <- 0
+
+sandlance_s1_s4 <- atlantis_box_sl %>% 
+  select(.bx0,botz,boundary,Sandlance_biomass) %>% 
+  st_set_geometry(NULL) %>%
+  mutate(Prop=Sandlance_biomass/sum(Sandlance_biomass,na.rm=TRUE)) %>%
+  select(-Sandlance_biomass)
+
+sl_min_prop <- sandlance_s1_s4 %>% filter(Prop>0 & boundary==F & botz < 0) %>% select(Prop) %>% pull() %>% min()
+sl_max_prop <- sandlance_s1_s4 %>% filter(Prop>0 & boundary==F & botz < 0) %>% select(Prop) %>% pull() %>% max()
+
+# how many boxes have zeroes? Except for the boundary boxes
+box_no_sl <- sandlance_s1_s4 %>% filter(Prop==0 & boundary==F & botz < 0) %>% nrow()
+
+sandlance_s1_s4$Prop[sandlance_s1_s4$Prop==0 & sandlance_s1_s4$boundary==F & sandlance_s1_s4$botz < 0] <- sl_min_prop
+sandlance_s1_s4$Prop[sandlance_s1_s4$Prop==sl_max_prop] <- sandlance_s1_s4$Prop[sandlance_s1_s4$Prop==sl_max_prop]-(sl_min_prop*box_no_sl)
+```
+
+Write out a table. 
+```{r}
+write.csv(sandlance_s1_s4,'sandlance_s1_s4.csv',row.names = FALSE)
+```
