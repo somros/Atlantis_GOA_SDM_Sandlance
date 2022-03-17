@@ -164,11 +164,11 @@ pol_sl <- sandlance_sf %>% filter(Pred_name=='Gadus chalcogrammus') %>%
 sandlance_all <- rbind(hal_sl,cod_sl,atf_sl,pol_sl)
 #6.
 sandlance_all <- sandlance_all %>% 
-  mutate(Sandlance_biomass=PBPPB*biomass) # biomass here is in mt
+  mutate(Sandlance_biomass_t=PBPPB*biomass) # biomass here is in mt
 #7.
 sandlance_all <- sandlance_all %>% 
   group_by(.bx0) %>%
-  summarise(Sandlance_biomass=sum(Sandlance_biomass,na.rm = TRUE)) %>%
+  summarise(Sandlance_biomass_t=sum(Sandlance_biomass_t,na.rm = TRUE)) %>%
   ungroup()
 #8.
 atlantis_box_sl <- atlantis_box %>% 
@@ -179,9 +179,9 @@ Plot.
 ```{r, fig.align="center"}
 atlantis_box_sl %>% 
   rowwise() %>% 
-  mutate(Sandlance_biomass=ifelse(isTRUE(boundary),NA,Sandlance_biomass)) %>% 
+  mutate(Sandlance_biomass_t=ifelse(isTRUE(boundary),NA,Sandlance_biomass_t)) %>% 
   ggplot()+
-  geom_sf(aes(fill=log1p(Sandlance_biomass)))+
+  geom_sf(aes(fill=log1p(Sandlance_biomass_t)))+
   geom_sf(data=coast_sf %>% st_transform(crs=atlantis_crs))+
   coord_sf(xlim=c(atlantis_bbox$xmin,atlantis_bbox$xmax),ylim =c(atlantis_bbox$ymin,atlantis_bbox$ymax))+
   scale_fill_viridis()+
@@ -190,23 +190,49 @@ atlantis_box_sl %>%
 ```
 Mostly on the western GOA shelf. How does this stack with depth?
 ```{r, fig.align="center"}
-atlantis_box_sl %>% filter(Sandlance_biomass>0) %>% 
-  ggplot()+geom_point(aes(x=-botz,y=Sandlance_biomass))+theme_minimal()
+atlantis_box_sl %>% filter(Sandlance_biomass_t>0) %>% 
+  ggplot()+geom_point(aes(x=-botz,y=Sandlance_biomass_t))+theme_minimal()
 ```
 Highest biomass value predicted at 130 m, other than that mostly found in shallower boxes < 100 m, and present in smaller amounts down to <300 m. 
 
 Below are the maps for flat (roughly equal to sand) and soft (roughly equal to mud) that we had mapped to the Atlantis boxes. ![This is sand.](../data/sand.png) ![This is mud.](../data/mud.png). For what we called "flat" (sandy categories in the dbSEABED data), there seems to be a lot more in the WGOA, consistently with these predictions for sandlance spatial distributions. However, there is some sand in the Southeast too. Also, for mud it is a different story, plenty in the CGOA and EGOA (not so much in the SE).
 
-As always, we are limited in that there is no data from BC. For now, assign the smallest proportion in the model to the boxes that have zero biomass, for consistency with what has been done for other groups (e.g., capelin).
+As always, we are limited in that there is no data from BC. Use equal density at depth in the EGOA as assumption for BC boxes.
+```{r}
+dz <- c(1,30,100,200,500,1000,4000) # starting from 1 to cut out island boxes
+
+dens_by_depth <- atlantis_box_sl %>%
+  mutate(dens_kgkm2 = (Sandlance_biomass_t*1000)/(area/1000000),
+         dz = findInterval(-botz,dz)) %>%
+  filter(between(box_id,70,92)) %>%
+  group_by(dz) %>%
+  summarise(dens_kgkm2=mean(dens_kgkm2, na.rm=T)) %>%
+  st_set_geometry(NULL) %>%
+  ungroup() 
+# need to add layer 1 as there is none of those in EGOA
+dens_by_depth <- rbind(dens_by_depth, data.frame('dz'=1, 'dens_kgkm2'=(dens_by_depth %>% filter(dz==2) %>% pull(dens_kgkm2)))) %>%
+  arrange(dz)
+
+# add density at depth and get new biomass based on that for BC only, leave biomass as is for the other boxes
+atlantis_box_sl2 <- atlantis_box_sl %>%
+  mutate(dz = findInterval(-botz,dz)) %>%
+  left_join(dens_by_depth, by = 'dz') %>%
+  rowwise() %>%
+  mutate(biomass_t = ifelse(box_id<92, Sandlance_biomass_t, ((dens_kgkm2/1000)*(area/1000000)))) %>%
+  ungroup() %>%
+  select(.bx0,botz,boundary,biomass_t)
+```
+
+Add smallest proportion to boxes that have zero.
 ```{r}
 # turn NAs to zeroes for this step
-atlantis_box_sl$Sandlance_biomass[is.na(atlantis_box_sl$Sandlance_biomass)] <- 0
+atlantis_box_sl2$biomass_t[is.na(atlantis_box_sl2$biomass_t)] <- 0
 
-sandlance_s1_s4 <- atlantis_box_sl %>% 
-  select(.bx0,botz,boundary,Sandlance_biomass) %>% 
+sandlance_s1_s4 <- atlantis_box_sl2 %>% 
+  select(.bx0,botz,boundary,biomass_t) %>% 
   st_set_geometry(NULL) %>%
-  mutate(Prop=Sandlance_biomass/sum(Sandlance_biomass,na.rm=TRUE)) %>%
-  select(-Sandlance_biomass)
+  mutate(Prop=biomass_t/sum(biomass_t,na.rm=TRUE)) %>%
+  select(-biomass_t)
 
 sl_min_prop <- sandlance_s1_s4 %>% filter(Prop>0 & boundary==F & botz < 0) %>% select(Prop) %>% pull() %>% min()
 sl_max_prop <- sandlance_s1_s4 %>% filter(Prop>0 & boundary==F & botz < 0) %>% select(Prop) %>% pull() %>% max()
@@ -218,7 +244,12 @@ sandlance_s1_s4$Prop[sandlance_s1_s4$Prop==0 & sandlance_s1_s4$boundary==F & san
 sandlance_s1_s4$Prop[sandlance_s1_s4$Prop==sl_max_prop] <- sandlance_s1_s4$Prop[sandlance_s1_s4$Prop==sl_max_prop]-(sl_min_prop*box_no_sl)
 ```
 
+Do a final check that S adds up to 1 exactly.
+```{r}
+sandlance_s1_s4 %>% pull(Prop) %>% sum() # seems all good
+```
+
 Write out a table. 
 ```{r}
-write.csv(sandlance_s1_s4,'sandlance_s1_s4.csv',row.names = FALSE)
+write.csv(sandlance_s1_s4,'../output/sandlance_s1_s4.csv',row.names = FALSE)
 ```
