@@ -253,3 +253,27 @@ Write out a table.
 ```{r}
 write.csv(sandlance_s1_s4,'../output/sandlance_s1_s4.csv',row.names = FALSE)
 ```
+
+View.
+```{r}
+sandlance_biom <- read.csv('C:/Users/Alberto Rovellini/Documents/GOA/Parametrization/build_init_prm_10COHORTS/data/life_history_parameters.csv') %>%
+  filter(Code == 'SAN') %>%
+  pull(Biomass_mt) #from Aydin et al. (2007)
+
+p <- atlantis_box %>%
+  select(.bx0, area) %>%
+  left_join((sandlance_s1_s4 %>%
+               select(.bx0, Prop) %>%
+  mutate(biom_box = Prop * sandlance_biom)), by = '.bx0') %>%
+  mutate(density_kg_km2 = biom_box * 1000 / (area / 1000000 )) %>%
+  ggplot()+
+  geom_sf(aes(fill = log1p(density_kg_km2)))+
+  geom_sf(data=coast_sf %>% st_transform(crs=atlantis_crs))+
+  coord_sf(xlim=c(atlantis_bbox$xmin,atlantis_bbox$xmax),ylim =c(atlantis_bbox$ymin,atlantis_bbox$ymax))+
+  scale_fill_viridis()+
+  theme_bw()+
+  labs(title = 'Sand lance density in Atlantis GOA')
+
+ggsave('sandlance_Atlantis_GOA.png',p,width = 12,height = 5)
+  
+```
