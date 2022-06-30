@@ -123,7 +123,7 @@ Steps are:
 0. Drop some columns
 1. Calculate PBPPB for each individual. 
 2. Join with the Atlantis box set (i.e. which box does the data point fall into?) 
-3. Group by predator species and by box, and take an average. That is the PBPPB by species by box. 
+3. Group by predator species and by box, and take an average. That is the PBPPB by species by box. This does not operate by haul (which is too granular) and skips the strata to go straight to Atlantis box.
 4. Read in the biomass maps in tons for the four predator species predicted by sdmTMB (although long-term we will want to use the stock assessment biomass as apportioned by the sdmTMB workflow rather than biomass estimates out of sdmTMB proper).
 5. Join by box, to add the predator biomass in that box.
 6. Multiply PBPPB by predator biomass within each box.
