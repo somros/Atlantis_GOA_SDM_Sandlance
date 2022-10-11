@@ -104,7 +104,9 @@ sandlance_sf <- rbind(ate_sandlance,no_sandlance) %>%
 
 sandlance_bbox <- sandlance_sf %>% st_bbox()
 
-sandlance_sf %>% ggplot()+
+sandlance_sf %>% 
+  filter(Prey_twt > 0) %>%
+  ggplot()+
   geom_sf(aes(color=Prey_twt/Pred_wt, shape = factor(Pred_name)))+
   geom_sf(data=coast_sf)+
   coord_sf(xlim=c(sandlance_bbox$xmin,sandlance_bbox$xmax), ylim=c(sandlance_bbox$ymin,sandlance_bbox$ymax))+
@@ -112,7 +114,7 @@ sandlance_sf %>% ggplot()+
   theme_minimal()
 ```
 
-Almost no predation of groundfish on sandlance in the EGOA. According to our assumptions, that means that there is no sandlance there. Compare this assumption with maps of sediments. The rough mapping work we did from the dbSEABED shows that there is little 'sand' in the east and center, but plenty of mud. Not sure where these guys hang out, read Matt Baker's papers.
+Almost no predation of groundfish on sandlance in the EGOA (possibly because of sampling differences). According to our assumptions, that means that there is no sandlance there. Compare this assumption with maps of sediments. The rough mapping work we did from the dbSEABED shows that there is little 'sand' in the east and center, but plenty of mud. Not sure where these guys hang out, read Matt Baker's papers. Also overall relatively low occurrence of sandlance in predator diets elsewhere in the GOA.
 
 The average prey-biomass-per-predator-biomass will be really low with all these zeroes, but it is they whole point. I anticipate there will be a very high variability, both from process and sampling error.
 
